@@ -1,0 +1,432 @@
+---
+title: "Coursera Pratical Machine Learning Assignment"
+output: html_document
+---
+
+<br>
+
+## Assignment description
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks.
+
+The goal of this assignment is to predict how well a participant performs a bicep curl based on data collected from accelerometers on the belt, forearm, arm, and dumbell of 6 participants.They were each asked to perform the exercise in five different ways. Classe A corresponds to the correct way of doing the exercise, while the other 4 Classes (B, C, D, ands E) correspond to common mistakes. The goal is to create a model that accurately predicts Classe. The final output of the assignment is a set of predictions that we will use to complete the Week 3 Quiz. 
+
+More information on the data is available here: http://groupware.les.inf.puc-rio.br/har (see "Weight Lifting Exercises Dataset").
+
+<br>
+
+## Load and view the data
+```{r1, echo=TRUE }
+# Disable scientific notation
+options(scipen=999)
+# Disable warnings and messages
+knitr::opts_chunk$set(message=FALSE, warning=FALSE, cache=TRUE)
+# Load the data directly from the website
+Train <- read.csv(url("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"), na.strings=c("", "NA", "NULL"))
+Test <- read.csv(url("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"), na.strings=c("", "NA", "NULL"))
+# Take a look 
+str(Train, list.len=10)
+```
+
+<br>
+
+## Data preparation 
+### Variable selection  
+Let's reduce the 5 time variables into 2 scaled time sequence variables that will allow us to understand how the measure variables evolve by groups (users, classes) over time. 
+```{r2 }
+# Join the datasets
+Train$problem_id <- NA
+Test$classe <- NA
+Test$type <- "TEST"
+Train$type <- "TRAIN"
+Data <- rbind(Train, Test)
+# Order by username and timestamps 1 and 2 
+Data <- Data[order(Data$user_name, Data$raw_timestamp_part_1, Data$raw_timestamp_part_2),]
+# Then, create a new timestamp variable that fuses timestamps 1 and 2 
+Data$timestamp <- as.numeric(paste0(Data$raw_timestamp_part_1, Data$raw_timestamp_part_2))
+# Create a scaled timestamp variable (timestamp index by user)
+library(plyr)
+Data_new <- ddply(Data, .(user_name), transform, timestamp_by_user = seq_along(timestamp))
+# Create a new variable that splits timestamps into 12 bins per username
+Data_new <- ddply(Data_new, .(user_name), transform, timestamp_bin=as.numeric(cut(timestamp_by_user, 12)))
+# Remove the redundant time variables
+Data_new <- Data_new[c(-3,-4,-5,-6,-7,-163)]
+# Separate the datasets again
+Train <- Data_new[Data_new$type=="TRAIN",]
+Train <- Train[c(-156, -157)]
+Test <- Data_new[Data_new$type=="TEST",]
+Test <- Test[c(-155, -157)]
+
+# Get rid of variables that are summary statistics
+# Determine whether the first row of each variable is NA 
+zy <- as.data.frame(cbind(names(Train),is.na(as.numeric(Train[1,]))))
+# Create an index for variables that have a real (non-NA) value in the first row
+index <- as.numeric(row.names(zy[zy$V2==F,]))
+# Subset original data based on this index 
+Train <- Train[,index]
+
+# Remove row number variable
+Train <- Train[,-1]
+
+# Split Train into testing and training sets, for cross-validation purposes.(This allows us to build and test a model before we actually use it to answer the quiz questions.)
+library(caret)
+inTrain <- createDataPartition(y=Train$classe, p=0.75, list=FALSE)
+train <- Train[inTrain,]
+test <- Train[-inTrain,]
+```
+<br>
+Can we reduce the number of variables by removing near-zero variance variables? 
+```{r3, echo=T }
+head(nearZeroVar(train, saveMetrics=T))
+```
+There are none!  
+<br>
+Plot the numeric variables against each other to determine correlations and remove highly correlated variables.
+```{r4 }
+# Generate correlation matrix
+numeric_vars <- train[,c(2:53)]
+M <- cor(numeric_vars)
+# Remove redundant variables, defined here as variables with absolute corr > 0.8
+highlyCor <- findCorrelation(M, 0.8)
+numeric_vars <- numeric_vars[,-highlyCor]
+# Create new data set with only the relevant variables 
+clean_train <- cbind(train[,c(1,55,56,54)], numeric_vars)
+```
+
+### Outcome distribution
+Is the outcome variable (classe) evenly distributed?
+```{r5 }
+classe_distribution <- ddply(clean_train, .(classe), plyr::summarize, freq=length(classe))
+classe_distribution
+```
+We notice that the outcome variable is evenly distributed among B,C,D,E, while A (the correct way of doing the exercise) has almost double the concentration compared to the other classes. 
+
+<br>
+
+## Exploratory plots
+
+### Histograms
+Let's start by seeing if each of the measure variables are normally distributed. Since there are a lot of variables to consider, let's group them by accelerometer placement (belt, arm, dumbbell, forearm). This also allows us to see if there are any patterns for a given body area. (For clarity, we'll only print the results for the belt measurements.)
+```{r6, echo=T, fig.keep='none'  }
+library(Hmisc)
+library(psych)
+par(mfrow=c(3, 4))
+multi.hist(clean_train[,grep("_belt", names(clean_train))], main="belt")
+multi.hist(clean_train[,grep("_arm", names(clean_train))], main="arm")
+multi.hist(clean_train[,grep("_dumbbell", names(clean_train))], main="dumbbell")
+multi.hist(clean_train[,grep("_forearm", names(clean_train))], main="forearm")
+```
+
+```{r6b, echo=F, fig.width=11, fig.height=8 }
+par(mfrow=c(3, 4))
+multi.hist(clean_train[,grep("_belt", names(clean_train))], main="belt")
+```
+There are very few normal distributions, nor are there visible patterns for any of the body areas.
+
+<br>  
+
+What if we make the same plots, but for each class? (For clarity, we won't print any of these plots.) 
+```{r7, echo=T, fig.keep='none' }
+for (i in 1:5) {
+  x <- unique(clean_train$classe)[i]
+  multi.hist(clean_train[ which(clean_train$classe==x),grep("_belt", names(clean_train))], main=paste(x, " belt"))
+  multi.hist(clean_train[ which(clean_train$classe==x),grep("_arm", names(clean_train))], main=paste(x, " arm"))
+  multi.hist(clean_train[ which(clean_train$classe==x),grep("_dumbbell", names(clean_train))], main=paste(x, " dumbbell"))
+  multi.hist(clean_train[ which(clean_train$classe==x),grep("_forearm", names(clean_train))], main=paste(x, " forearm"))
+}
+```
+There are more normal distributions, but not enough to make these variables good candidates for a regression model (at least without transformations). We will favor classification trees over regression in our modeling phase.
+
+### Time plots
+Let's try to visualize the relationship between classe and time. (For clarity, we will only print two of these plots.)
+```{r8 , echo=TRUE, fig.keep='none', results='hide'}
+# First, create a list where each element is a data frame containing the values for username, timestamp, classe 
+# and values for each of the measure variables
+result <- function(variable) {
+# Write a function to select each numeric variable and combine with username, timestamp and classe
+  x <- data.frame(clean_train$user_name, clean_train$timestamp_by_user, clean_train$classe, variable)
+  xx <- rename(x, c("clean_train.user_name"="user_name", "clean_train.timestamp_by_user"="timestamp", "clean_train.classe"="classe"))
+}                   
+# Run the function on the measure variables in clean_train
+clean_train_measures <- clean_train[5:43]
+result2 <- lapply(clean_train_measures, result)
+# Rename col 3 to be the list element name
+for (i in seq_along(result2)){
+  colnames(result2[[i]]) <- c("user_name", "timestamp", "classe", names(result2[i]))
+}
+# Generate scatterplots for each variable to see how classe changes with time
+plots <- function (df) {
+  (par(mfrow=c(1, 1)))
+  plot(df[,2], df[,4], ylab=names(df)[4], xlim=c(min(df[,2]), max(df[,2])), ylim=c(min(df[,4]), max(df[,4])), xlab="Timestamp", main=colnames(df)[4], type="p", col=df[,3])
+  legend(3200,max(df[,4]),unique(df[,3]),col=1:length(df[,3]),pch=1)
+  
+}
+lapply(result2, plots)
+```
+
+```{r8b, echo=F, fig.height=6, fig.width=10 }
+plots(result2[[17]])
+plots(result2[[20]])
+```
+Class evolves from A to E in alphabetical order, over time. 
+
+<br>
+
+What if we make separate plots for each username? (For clarity, we will only print one set of plots.)
+```{r9, echo=TRUE, fig.keep='none', results='hide' }
+# Generate scatterplots for each variable to be able to see individual performance over time by classe    
+plots2 <- function (df) {
+  (par(mfrow=c(2, 3)))
+  for (i in 1:6) {
+    y <- unique(df$user_name)[i]
+    yy <- df[ which(df$user_name==y),]
+    plot(yy[,2], yy[,4], ylab=names(yy)[4], xlim=c(min(df[,2]), max(df[,2])), ylim=c(min(df[,4]), max(df[,4])), xlab="Timestamp", main=paste(yy[1,1], colnames(yy)[4]), type="p", col=yy[,3])
+    legend(3200,max(df[,4]),unique(yy[,3]),col=1:length(yy[,3]),pch=1)
+  }
+}
+lapply(result2, plots2)
+```
+
+```{r9b, echo=F, fig.width=11, fig.height=8 }
+plots2(result2[[29]])
+```
+For any given user, there is perfect delineation of the classes over time, progressing from A to E in alphabetical order. This suggests that time will be the most important predictor of classe, by far. But what does this really mean? Given what we know about the problem, it's clear that the 6 participants were each told to do a certain number of reps in five different ways, with no overlap. So while time will help us accurately predict classe for the purposes of the quiz, it won't actually help us predict classe outside of these experimental conditions. For a working model that can predict classe in real life, we would need to exclude the username and time variables entirely. 
+
+### Boxplots
+To look at how the measure variables vary by classe, let's look at boxplots. (For clarity, we will only print two plots.)
+```{r10, echo=TRUE, fig.keep='none', results='hide' }
+boxplots_simple <- function (df){ 
+      (par(mfrow=c(1, 1)))
+      boxplot(df[,4]~df[,3],data=df, main=colnames(df)[4])
+  }
+lapply(result2, boxplots_simple)
+```
+
+```{r10b, echo=F, fig.height=6, fig.width=10 }
+boxplots_simple(result2[[36]])
+boxplots_simple(result2[[20]])
+```
+The means across classes are often pretty close, so there isn't huge variability between classes, which may make classe more difficult to predict without including the time variables. 
+
+### T.tests
+Let's do some t.tests, to make sure the differences in the classe means are statistically significant across variables. 
+```{r11 }
+t.tests <- function (df){ 
+    pairwise.t.test(x=df[,4],g=df[,3])
+}
+t.test.result <- lapply(result2, t.tests)
+```
+
+What percentage of t.tests have a p>0.05?
+```{r11b }
+p.values <- sapply (t.test.result, function (x) {x$p.value})
+p.values <- as.data.frame(apply(p.values, 2, function (x) {round(x,5)})) 
+p.values <- na.omit(p.values)
+p.values <- unlist(p.values)
+percentage <- length(p.values[which(p.values>0.05)])/length(p.values)
+percentage
+```
+About 1/3 of t.tests have a p>0.05, so 2/3 of the t.tests show that the classe mean differences are significant. This is good news for building a model that excludes the time variables. 
+
+### Outliers
+An issue that became clear on the time plots by username is outliers. There are a handful of points that are so off the charts that they are probably errors, so let's go ahead and remove them.
+```{r12 }
+clean_train <- clean_train[ -which(clean_train$total_accel_dumbbell==max(clean_train$total_accel_dumbbell)),]
+clean_train <- clean_train[ -which(clean_train$gyros_dumbbell_y==max(clean_train$gyros_dumbbell_y)),]
+clean_train <- clean_train[ -which(clean_train$magnet_dumbbell_x==min(clean_train$magnet_dumbbell_x)),]
+clean_train <- clean_train[ -which(clean_train$gyros_forearm_x==min(clean_train$gyros_forearm_x)),]
+```
+
+### Imputing missing values
+The other issue we see from the time plots by username is that there are some zero values for Jeremy-arm and Adelmo-forearm measures that don't fit into the patterns for those variables. These zero's are likely due to malfunctioning equipment,   rather than true scores of zero. So let's impute values for these zero values, which could introduce bias into the model. 
+```{r13, results='hide' }
+# First, identify the zero-value variables in question and convert them to NA
+make_NA <- function(var, user_name) {
+  var <- ifelse(clean_train$user_name==user_name & var==0, var==NA, var)
+  var
+}
+clean_train$yaw_forearm <- make_NA(clean_train$yaw_forearm, "adelmo")
+clean_train$pitch_forearm <- make_NA(clean_train$pitch_forearm, "adelmo")
+clean_train$roll_forearm <- make_NA(clean_train$roll_forearm, "adelmo")
+clean_train$yaw_arm <- make_NA(clean_train$yaw_arm, "jeremy")
+clean_train$pitch_arm <- make_NA(clean_train$pitch_arm, "jeremy")
+clean_train$roll_arm <- make_NA(clean_train$roll_arm, "jeremy")
+# Impute missing values, using the measure variables to estimate the correct values
+library(mice)
+clean_train_measures <- clean_train[5:43]
+imputed <- mice(clean_train_measures)
+clean_train_measures <- complete(imputed,1)
+# Then, complete the dataset
+clean_train <- cbind(clean_train[c(1:4)], clean_train_measures)
+```
+
+<br>
+
+## Modeling
+### Decision trees
+#### 1. All variables
+Let's run a simple decision tree model first, including all of the variables.
+```{r14, fig.height=6, fig.width=10 }
+# Run the same transformations on the test set as on the train set
+numeric_vars_test <- test[,c(2:53)]
+numeric_vars_test <- numeric_vars_test[,-highlyCor]
+clean_test <- cbind(test[,c(1,55,56,54)], numeric_vars_test)
+# Run the decision tree model on the training set
+set.seed(145689)
+modFit <- train(classe ~ ., data=clean_train, method="rpart")
+# Plot the decision tree
+library(rattle)
+fancyRpartPlot(modFit$finalModel)
+```
+As expected, the tree splits on time variables.
+
+```{r16 }
+# Predict classe on the test set
+predicted <- predict(modFit, clean_test)
+# Evaluate model 
+confusionMatrix(clean_test$classe, predicted)
+```
+Our simple decision tree model has an accuracy rate of 89.2%. Pretty good for a first attempt. Of course, this is due to the conditions of the experiment, rather than a true relationship between time and classe. It would be a worthless model for predicting classe outside of these specific experimental conditions.
+
+<br>
+
+#### 2. Measure variables
+What if we exclude the time variables and username and use only the measure variables, so that the model could predict classe outside of the experimental conditions? 
+```{r18 }
+# Let's create new datasets for train and test, excluding time and username
+clean_train_no_time <- clean_train[c(4:43)]
+clean_test_no_time <-  clean_test[c(4:43)]
+# Run the model, predict classe, and evaluate model performance
+set.seed(785369)
+modFit2 <- train(classe ~ ., data=clean_train_no_time, method="rpart")
+predicted2 <- predict(modFit2, clean_test_no_time)
+confusionMatrix(clean_test_no_time$classe, predicted2)
+
+```
+Without time variables, our simple decision tree model now has an accuracy rate of just 46.8%. Pretty poor.
+
+<br>
+
+#### 3. Measure variables using PCA
+What if we use Principal Component Analysis for a decision tree model on the measure variables (excl. time and username), rather than manually reducing the number of variables? Would that improve the model? For that, we will have to re-instate the measure variables that we excluded in the data preparation portion of the process before running the model. 
+```{r19, echo=TRUE, results='hide'}
+# Redo some of the data preparation on the original train and test sets
+train <- train[ -which(train$total_accel_dumbbell==max(train$total_accel_dumbbell)),]
+train <- train[ -which(train$gyros_dumbbell_y==max(train$gyros_dumbbell_y)),]
+train <- train[ -which(train$magnet_dumbbell_x==min(train$magnet_dumbbell_x)),]
+train <- train[ -which(train$gyros_forearm_x==min(train$gyros_forearm_x)),]
+make_NA <- function(var, user_name) {
+  var <- ifelse(train$user_name==user_name & var==0, var==NA, var)
+  var
+}
+train$yaw_forearm <- make_NA(train$yaw_forearm, "adelmo")
+train$pitch_forearm <- make_NA(train$pitch_forearm, "adelmo")
+train$roll_forearm <- make_NA(train$roll_forearm, "adelmo")
+train$yaw_arm <- make_NA(train$yaw_arm, "jeremy")
+train$pitch_arm <- make_NA(train$pitch_arm, "jeremy")
+train$roll_arm <- make_NA(train$roll_arm, "jeremy")
+library(mice)
+train_measures <- train[2:53]
+imputed <- mice(train_measures)
+train_measures <- complete(imputed,1)
+train <- cbind(train[c(54)], train_measures)
+test <- test[c(54,2:53)]
+```
+```{r19b, echo=TRUE}
+# Run the PCA model, predict classe, and evaluate model performance
+set.seed(145689)
+modFit3 <- train(classe ~ ., data=train, preProcess="pca", method="rpart")
+predicted3 <- predict(modFit3, test)
+confusionMatrix(test$classe, predicted3)
+```
+Our PCA decision tree model using the measure variables has an accuracy rate of just 32.9%. Even worse!
+
+### Random forests
+
+#### 1. All variables
+Random forest model including all variables.
+```{r20 }
+library(randomForest)
+# Run the model, predict classe, and evaluate model performance
+set.seed(145873)
+modFit4 <- randomForest(classe ~ ., data=clean_train)
+predicted4 <- predict(modFit4, clean_test)
+confusionMatrix(clean_test$classe, predicted4)
+```
+Accuracy goes up to 99.7%!
+
+```{r20b, fig.height=6, fig.width=10}
+varImpPlot(modFit4)
+```
+Again, as expected, the most important variables are (by far) those related to time.
+
+<br>
+
+#### 2. Measure variables
+Random forest model excluding time and username variables.
+```{r21 }
+# Run the model, predict classe, and evaluate model performance
+set.seed(21036)
+modFit5 <- randomForest(classe ~ ., data=clean_train_no_time)
+predicted5 <- predict(modFit5, clean_test_no_time)
+confusionMatrix(clean_test_no_time$classe, predicted5)
+```
+Accuracy goes up to 98.9%, which is almost as good as the model that included the time variables! This is a great illustration of the power of random forests at capturing patterns in the data that don't appear on the first try. 
+```{r21b, fig.height=6, fig.width=10 }
+varImpPlot(modFit5)
+```
+The variable importance plot shows that we could probably further reduce the number of variables we used in the model and still get an accurate prediction. 
+
+<br>
+
+#### 3. Measure variables using PCA
+Random forest model using PCA (excl. time and username variables).
+```{r22 }
+# Run the model, predict classe, and evaluate model performance
+set.seed(89)
+trControl <- trainControl(method = "none", number = 1, repeats = 1)
+modFit6 <- train(classe ~ ., data=train, preProcess="pca", method="rf", trControl = trainControl(method="none"), tuneGrid=data.frame(mtry=3))
+predicted6 <- predict(modFit6, test)
+confusionMatrix(test$classe, predicted6)
+```
+A random forest model using PCA has accuracy of 93.6%. This is very good, but it doesn't beat the model where we trimmed the correlated variables manually. 
+
+### Boosting
+#### 1. Measure variables using PCA
+Could we improve the PCA model by trying another method?
+```{r23}
+# Run the model, predict classe, and evaluate model performance
+modFit7 <-train(classe ~ ., data=clean_train, method = "gbm", trControl = trainControl(method = "repeatedcv", number = 5, repeats = 1), verbose = FALSE)
+predicted7 <- predict(modFit7, clean_test)
+confusionMatrix(clean_test$classe, predicted7)
+```
+A general boosted model using only the measure variables has accuracy of 99.4%, so we did better than the random forest PCA model! It also performs a bit better than the random forest model using manually selected measure variables. But it's also quite a bit slower, and the interpretability of the principal components isn't ideal, either. 
+
+<br>
+
+## Model selection
+Since the random forest including all variables gave us the highest accuracy rate, we'll use that one for the Coursera submission. Our accuracy rate (99.92%) for our chosen model gives us an estimate for the out of sample error rate, which is 100% - 99.67% = 0.33%, with a 95% confidence interval of 0.19% and 0.53%. This means we are very likely to obtain a perfect score on the quiz, if our model is correct. However, if we were selecting the model for real-world predictions outside of the experimental conditions in this study, we would select the random forest model that excludes time and username variables, which is quick to run, easily interpretable, and offers over 99% accuracy. 
+
+<br>
+
+## Coursera quiz
+```{r24 }
+# Perform same transformations on Test set as on Train set
+zy <- as.data.frame(cbind(names(Test),is.na(as.numeric(Test[1,]))))
+index <- as.numeric(row.names(zy[zy$V2==F,]))
+Test <- Test[,index]
+Test <- Test[,-1]
+numeric_vars_Test <- Test[,c(2:53)]
+numeric_vars_Test <- numeric_vars_Test[,-highlyCor]
+clean_Test <- cbind(Test[,c(1,55,56,54)], numeric_vars_Test)
+# Order the set by Problem ID
+clean_Test <- clean_Test[order(clean_Test$problem_id),] 
+# Remove the Problem ID as a variable
+clean_Test <- clean_Test[-4]
+# Predict classe for the Test set using the random forest for all variables model
+predicted_final <- predict(modFit4, clean_Test, method="class")
+# Organize the predictions for easy entry into the quiz page
+question_number <- seq_along(1:20)
+data.frame(question_number, predicted_final)
+```
+100% score on the quiz. Hooray! 
+
