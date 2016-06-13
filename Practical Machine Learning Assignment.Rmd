@@ -19,7 +19,7 @@ More information on the data is available here: http://groupware.les.inf.puc-rio
 # Disable scientific notation
 options(scipen=999)
 # Disable warnings and messages
-knitr::opts_chunk$set(message=FALSE, warning=FALSE, cache=TRUE)
+knitr::opts_chunk$set(message=FALSE, warning=FALSE, cache=TRUE, dev="png")
 # Load the data directly from the website
 Train <- read.csv(url("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"), na.strings=c("", "NA", "NULL"))
 Test <- read.csv(url("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"), na.strings=c("", "NA", "NULL"))
@@ -116,10 +116,11 @@ multi.hist(clean_train[,grep("_dumbbell", names(clean_train))], main="dumbbell")
 multi.hist(clean_train[,grep("_forearm", names(clean_train))], main="forearm")
 ```
 
-```{r6b, echo=F, fig.width=11, fig.height=8 }
+```{r6b, echo=F, fig.width=11, fig.height=8, dpi=36, out.width="600px", out.height="600px" }
 par(mfrow=c(3, 4))
 multi.hist(clean_train[,grep("_belt", names(clean_train))], main="belt")
 ```
+<br>
 There are very few normal distributions, nor are there visible patterns for any of the body areas.
 
 <br>  
@@ -137,7 +138,7 @@ for (i in 1:5) {
 There are more normal distributions, but not enough to make these variables good candidates for a regression model (at least without transformations). We will favor classification trees over regression in our modeling phase.
 
 ### Time plots
-Let's try to visualize the relationship between classe and time. (For clarity, we will only print two of these plots.)
+Let's try to visualize the relationship between classe and time. (For clarity, we will only print one of these plots.)
 ```{r8 , echo=TRUE, fig.keep='none', results='hide'}
 # First, create a list where each element is a data frame containing the values for username, timestamp, classe 
 # and values for each of the measure variables
@@ -163,10 +164,10 @@ plots <- function (df) {
 lapply(result2, plots)
 ```
 
-```{r8b, echo=F, fig.height=6, fig.width=10 }
-plots(result2[[17]])
+```{r8b, echo=F, fig.height=6, fig.width=10, dpi=36, out.width="600px", out.height="600px" }
 plots(result2[[20]])
 ```
+<br>
 Class evolves from A to E in alphabetical order, over time. 
 
 <br>
@@ -186,13 +187,14 @@ plots2 <- function (df) {
 lapply(result2, plots2)
 ```
 
-```{r9b, echo=F, fig.width=11, fig.height=8 }
+```{r9b, echo=F, fig.width=11, fig.height=8, dpi=36, out.width="600px", out.height="600px" }
 plots2(result2[[29]])
 ```
+<br>
 For any given user, there is perfect delineation of the classes over time, progressing from A to E in alphabetical order. This suggests that time will be the most important predictor of classe, by far. But what does this really mean? Given what we know about the problem, it's clear that the 6 participants were each told to do a certain number of reps in five different ways, with no overlap. So while time will help us accurately predict classe for the purposes of the quiz, it won't actually help us predict classe outside of these experimental conditions. For a working model that can predict classe in real life, we would need to exclude the username and time variables entirely. 
 
 ### Boxplots
-To look at how the measure variables vary by classe, let's look at boxplots. (For clarity, we will only print two plots.)
+To look at how the measure variables vary by classe, let's look at boxplots. (For clarity, we will only print one plot.)
 ```{r10, echo=TRUE, fig.keep='none', results='hide' }
 boxplots_simple <- function (df){ 
       (par(mfrow=c(1, 1)))
@@ -201,10 +203,10 @@ boxplots_simple <- function (df){
 lapply(result2, boxplots_simple)
 ```
 
-```{r10b, echo=F, fig.height=6, fig.width=10 }
+```{r10b, echo=F, fig.height=6, fig.width=10, dpi=36, out.width="600px", out.height="600px" }
 boxplots_simple(result2[[36]])
-boxplots_simple(result2[[20]])
 ```
+<br>
 The means across classes are often pretty close, so there isn't huge variability between classes, which may make classe more difficult to predict without including the time variables. 
 
 ### T.tests
@@ -265,7 +267,7 @@ clean_train <- cbind(clean_train[c(1:4)], clean_train_measures)
 ### Decision trees
 #### 1. All variables
 Let's run a simple decision tree model first, including all of the variables.
-```{r14, fig.height=6, fig.width=10 }
+```{r14, fig.height=6, fig.width=10, dpi=36, out.width="600px", out.height="600px" }
 # Run the same transformations on the test set as on the train set
 numeric_vars_test <- test[,c(2:53)]
 numeric_vars_test <- numeric_vars_test[,-highlyCor]
@@ -277,6 +279,7 @@ modFit <- train(classe ~ ., data=clean_train, method="rpart")
 library(rattle)
 fancyRpartPlot(modFit$finalModel)
 ```
+<br>
 As expected, the tree splits on time variables.
 
 ```{r16 }
@@ -352,11 +355,12 @@ modFit4 <- randomForest(classe ~ ., data=clean_train)
 predicted4 <- predict(modFit4, clean_test)
 confusionMatrix(clean_test$classe, predicted4)
 ```
-Accuracy goes up to 99.7%!
+Accuracy goes up to 99.7%! 
 
-```{r20b, fig.height=6, fig.width=10}
+```{r20b, fig.height=6, fig.width=10, dpi=36, out.width="600px", out.height="600px"}
 varImpPlot(modFit4)
 ```
+<br>
 Again, as expected, the most important variables are (by far) those related to time.
 
 <br>
@@ -371,9 +375,10 @@ predicted5 <- predict(modFit5, clean_test_no_time)
 confusionMatrix(clean_test_no_time$classe, predicted5)
 ```
 Accuracy goes up to 98.9%, which is almost as good as the model that included the time variables! This is a great illustration of the power of random forests at capturing patterns in the data that don't appear on the first try. 
-```{r21b, fig.height=6, fig.width=10 }
+```{r21b, fig.height=6, fig.width=10, dpi=36, out.width="600px", out.height="600px" }
 varImpPlot(modFit5)
 ```
+<br>
 The variable importance plot shows that we could probably further reduce the number of variables we used in the model and still get an accurate prediction. 
 
 <br>
